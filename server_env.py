@@ -276,6 +276,35 @@ while(True):
                 
                 # For backward compatibility with panda robot, use first value as gripper
                 gripper = gripper_values[0] / 90.0  # Scale down for gripper
+            elif len(gripper_values) == 48:
+                # Raw quaternions format: 48 values (4 fingers × 3 bones × 4 components)
+                finger_names = ["Index", "Middle", "Ring", "Thumb"]
+                bone_names = ["Base", "Mid", "Tip"]
+
+                current_time = datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3]
+                print("\n" + "="*60)
+                print("HAND TRACKING DATA - Raw Bone Quaternions (local space)")
+                print("="*60)
+                log_file.write(f"[{current_time}] HAND_DATA_START_QUATS\n")
+
+                idx = 0
+                for f in range(4):
+                    print(f"\n{finger_names[f]} Finger:")
+                    for b in range(3):
+                        qx, qy, qz, qw = gripper_values[idx:idx+4]
+                        idx += 4
+                        print(f"  {bone_names[b]:>4}: x={qx: .6f}, y={qy: .6f}, z={qz: .6f}, w={qw: .6f}")
+                        log_file.write(f"[{current_time}] {finger_names[f]} {bone_names[b]} q {qx:.6f} {qy:.6f} {qz:.6f} {qw:.6f}\n")
+
+                print("\nSummary:")
+                print(f"  Total quaternion components: {len(gripper_values)}")
+                print("="*60)
+                log_file.write(f"[{current_time}] SUMMARY_QUATS Total:{len(gripper_values)}\n")
+                log_file.write(f"[{current_time}] HAND_DATA_END_QUATS\n\n")
+                log_file.flush()
+
+                # Use tip base-x as a proxy for gripper scaling to keep downstream stable
+                gripper = max(min(abs(gripper_values[3]), 1.0), 0.0)
             else:
                 # Fallback for unknown format
                 gripper = gripper_values[0] if len(gripper_values) > 0 else 0

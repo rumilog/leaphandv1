@@ -110,6 +110,25 @@ Or press `Ctrl+C` if running in foreground terminals.
 3. **Check USB connection**: Verify LEAP Hand is connected (usually `/dev/ttyUSB0`)
 4. **Check logs**: Review output files or terminal output for error messages
 
+### Serial permissions (quick fix)
+
+If you see permission errors opening `/dev/ttyUSB0`:
+
+Temporary (until unplug/reboot):
+
+```bash
+ls -l /dev/ttyUSB*
+sudo chmod a+rw /dev/ttyUSB0
+```
+
+Recommended persistent fix (no sudo afterward):
+
+```bash
+sudo usermod -aG dialout $USER
+newgrp dialout
+ls -l /dev/ttyUSB0   # group should be dialout with rw for group
+```
+
 ### Inverted Movement
 
 If the LEAP hand moves in the opposite direction:

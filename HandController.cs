@@ -162,33 +162,45 @@ public class HandController : MonoBehaviour
             if (OVRPlugin.GetHandTrackingEnabled() && OVRPlugin.GetHandState(OVRPlugin.Step.Render, OVRPlugin.Hand.HandRight, ref handState) && handState.BoneRotations.Length > 18)
             {
                 use_robot_hand = true;
-                Dictionary<string, int> finger_indices = new Dictionary<string, int>(){ //finger tips
-                    {"Thumb", 5},
-                    {"index", 8},
-                    {"middle", 11},
-                    {"ring", 14},
-                    {"pinky", 18} 
+                // Compute DIP, PIP, MCP_Flex, MCP_Abd in DEGREES
+                // Order: Index, Middle, Ring, Thumb × [DIP, PIP, MCP_Flex, MCP_Abd]
+                Dictionary<string, int> finger_tip_indices = new Dictionary<string, int>(){
+                    {"Index", 8},
+                    {"Middle", 11},
+                    {"Ring", 14},
+                    {"Thumb", 5}
                 };
                 finger_angles_message = "";
-                foreach (KeyValuePair<string, int> kvp in finger_indices)
+                foreach (KeyValuePair<string, int> kvp in finger_tip_indices)
                 {
-                    Quaternion finger_tip = new Quaternion(handState.BoneRotations[kvp.Value].x, handState.BoneRotations[kvp.Value].y,
+                    Quaternion tip = new Quaternion(handState.BoneRotations[kvp.Value].x, handState.BoneRotations[kvp.Value].y,
                         handState.BoneRotations[kvp.Value].z, handState.BoneRotations[kvp.Value].w);
-
-                    Quaternion finger_mid = new Quaternion(handState.BoneRotations[kvp.Value - 1].x, handState.BoneRotations[kvp.Value - 1].y,
+                    Quaternion mid = new Quaternion(handState.BoneRotations[kvp.Value - 1].x, handState.BoneRotations[kvp.Value - 1].y,
                         handState.BoneRotations[kvp.Value - 1].z, handState.BoneRotations[kvp.Value - 1].w);
-
-                    Quaternion finger_base = new Quaternion(handState.BoneRotations[kvp.Value - 2].x, handState.BoneRotations[kvp.Value - 2].y,
+                    Quaternion bas = new Quaternion(handState.BoneRotations[kvp.Value - 2].x, handState.BoneRotations[kvp.Value - 2].y,
                         handState.BoneRotations[kvp.Value - 2].z, handState.BoneRotations[kvp.Value - 2].w);
 
-                    // Compute PIP and DIP via simple quaternion angle difference
-                    float pipDeg = Mathf.Clamp(AngleDiffDeg(finger_base, finger_mid), 0f, 110f);
-                    float dipDeg = Mathf.Clamp(AngleDiffDeg(finger_mid, finger_tip), 0f, 80f);
-                    Debug.Log(kvp.Key + " PIP=" + pipDeg.ToString("F2") + "°, DIP=" + dipDeg.ToString("F2") + "°");
-                    
-                    // Send PIP and DIP values to server (in radians for server compatibility)
-                    finger_angles_message += (pipDeg * Mathf.Deg2Rad).ToString("F5") + '\t';
-                    finger_angles_message += (dipDeg * Mathf.Deg2Rad).ToString("F5") + '\t';
+                    // Relative joint angles via shortest-arc angle between adjacent bones
+                    Quaternion qDipRel = Quaternion.Inverse(mid) * tip;
+                    Quaternion qPipRel = Quaternion.Inverse(bas) * mid;
+                    float dipDeg = 2f * Mathf.Acos(Mathf.Clamp(Mathf.Abs(qDipRel.w), 0f, 1f)) * Mathf.Rad2Deg;
+                    float pipDeg = 2f * Mathf.Acos(Mathf.Clamp(Mathf.Abs(qPipRel.w), 0f, 1f)) * Mathf.Rad2Deg;
+
+                    // MCP: use base bone local Euler mapping per your convention
+                    // Default: Z = flexion, Y = abduction; Thumb abduction uses X axis
+                    Vector3 baseEuler = bas.eulerAngles;
+                    float mcpFlexDeg = Mathf.DeltaAngle(0f, baseEuler.z);
+                    float mcpAbdDeg = (kvp.Key == "Thumb")
+                        ? Mathf.DeltaAngle(0f, baseEuler.x)  // Thumb abduction about X
+                        : Mathf.DeltaAngle(0f, baseEuler.y); // Others abduction about Y
+
+                    Debug.Log(kvp.Key + " DIP=" + dipDeg.ToString("F2") + "°, PIP=" + pipDeg.ToString("F2") + "°, MCP_Flex=" + mcpFlexDeg.ToString("F2") + "°, MCP_Abd=" + mcpAbdDeg.ToString("F2") + "°");
+
+                    // Send degrees in order: DIP, PIP, MCP_Flex, MCP_Abd
+                    finger_angles_message += dipDeg.ToString("F5") + '\t';
+                    finger_angles_message += pipDeg.ToString("F5") + '\t';
+                    finger_angles_message += mcpFlexDeg.ToString("F5") + '\t';
+                    finger_angles_message += mcpAbdDeg.ToString("F5") + '\t';
                 }
             }
             else

@@ -47,6 +47,14 @@ class LeapPipDipTeleop:
         
         # Set up signal handler
         signal.signal(signal.SIGINT, self.signal_handler)
+
+        # Scaling to increase closing for PIP/DIP (method 2)
+        # Tune these if fist is under-closing
+        self.pip_scale = 2
+        self.dip_scale = 2
+        # Per-finger multipliers [Index, Middle, Ring, Thumb]
+        self.pip_scale_per_finger = [1.0, 1.15, 1.25, 1.0]
+        self.dip_scale_per_finger = [1.0, 1.10, 1.20, 1.0]
     
     def init_leap_hand(self):
         """Initialize LEAP hand connection"""
@@ -111,6 +119,62 @@ class LeapPipDipTeleop:
                                                    Pinky PIP, Pinky DIP]
         """
         if not self.dxl_client:
+            return False
+
+    def update_full_joints_deg16(self, angles_deg16):
+        """
+        Update MCP_Abd, MCP_Flex, PIP, DIP for Index, Middle, Ring, Thumb.
+        Input: 16 values in DEGREES ordered per frame: 
+        [Index_DIP, Index_PIP, Index_MCP_Flex, Index_MCP_Abd,
+         Middle_DIP, Middle_PIP, Middle_MCP_Flex, Middle_MCP_Abd,
+         Ring_DIP, Ring_PIP, Ring_MCP_Flex, Ring_MCP_Abd,
+         Thumb_DIP, Thumb_PIP, Thumb_MCP_Flex, Thumb_MCP_Abd]
+        """
+        if not self.dxl_client:
+            return False
+        try:
+            vals_rad = np.radians(angles_deg16)
+            # Apply scaling to DIP/PIP for each finger block (DIP at +0, PIP at +1)
+            for f in range(4):
+                base = f * 4
+                vals_rad[base + 0] *= (self.dip_scale * self.dip_scale_per_finger[f])  # DIP
+                vals_rad[base + 1] *= (self.pip_scale * self.pip_scale_per_finger[f])  # PIP
+            # Read current LEAP (allegro convention)
+            current_leap = self.dxl_client.read_pos()
+            current_allegro = lhu.LEAPhand_to_allegro(current_leap, zeros=False)
+
+            def map_finger(block_start, dip_idx):
+                # block is [DIP, PIP, MCP_Flex, MCP_Abd]
+                DIP = vals_rad[dip_idx + 0]
+                PIP = vals_rad[dip_idx + 1]
+                MCP_F = vals_rad[dip_idx + 2]
+                MCP_A = vals_rad[dip_idx + 3]
+                # Invert MCP abduction to match LEAP hand kinematics
+                # Index starts at 0, Middle at 4, Ring at 8, Thumb at 12
+                if block_start in (0, 4, 8, 12):
+                    MCP_A = -MCP_A
+                current_allegro[block_start + 0] = MCP_A
+                current_allegro[block_start + 1] = MCP_F
+                current_allegro[block_start + 2] = PIP
+                current_allegro[block_start + 3] = DIP
+
+            # Index block start 0, packet offset 0
+            map_finger(0, 0)
+            # Middle block start 4, packet offset 4
+            map_finger(4, 4)
+            # Ring block start 8, packet offset 8
+            map_finger(8, 8)
+            # Thumb block start 12, packet offset 12
+            map_finger(12, 12)
+
+            leap_positions = lhu.allegro_to_LEAPhand(current_allegro, zeros=False)
+            leap_positions = lhu.angle_safety_clip(leap_positions)
+            self.dxl_client.write_desired_pos(self.motors, leap_positions)
+            return True
+        except Exception as e:
+            print(f"❌ Error updating full joints: {e}")
+            import traceback
+            traceback.print_exc()
             return False
         
         try:
@@ -188,9 +252,13 @@ class LeapPipDipTeleop:
                         # Update LEAP hand with PIP and DIP angles
                         success = self.update_pip_dip_joints(gripper_values)
                         return success
+                    elif len(gripper_values) == 16:
+                        # New format: 16 values in degrees (Index, Middle, Ring, Thumb × DIP,PIP,MCP_Flex,MCP_Abd)
+                        success = self.update_full_joints_deg16(gripper_values)
+                        return success
                     else:
                         if len(gripper_values) != 0:  # Don't print for empty messages
-                            print(f"⚠️  Expected 10 values (PIP/DIP for 5 fingers), got {len(gripper_values)}")
+                            print(f"⚠️  Expected 10 (PIP/DIP) or 16 (full) values, got {len(gripper_values)}")
                         return False
                 else:
                     return False
